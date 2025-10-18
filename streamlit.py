@@ -1,121 +1,138 @@
+import os
+from pathlib import Path
+
+import streamlit as st
+
+# Бібліотеки для обробки тексту та візуалізацій
 import re
 import string
-from pathlib import Path
 from collections import Counter
 
+import PyPDF2
 import nltk
-nltk.download('stopwords')
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 
-import PyPDF2
-from wordcloud import WordCloud
 import matplotlib.pyplot as plt
+from wordcloud import WordCloud
 
+# LDA (Gensim)
 from gensim import corpora
 from gensim.models import LdaModel
 from gensim.utils import simple_preprocess
-import pyLDAvis.gensim_models
+
 import pyLDAvis
+import pyLDAvis.gensim_models
+
+# Ініціалізація NLTK
+nltk.download('punkt')
+nltk.download('stopwords')
+
+st.set_page_config(page_title="Text Analytics App", layout="wide")
+
+st.title("Текстова аналітика документів")
 
 # 1) Завантаження файлу
-def extract_text_from_pdf(pdf_path):
-    text = []
-    with open(pdf_path, "rb") as f:
-        reader = PyPDF2.PdfReader(f)
-        for page in reader.pages:
-            t = page.extract_text() or ""
-            text.append(t)
-    return "\n".join(text)
+uploaded_file = st.file_uploader("Завантаж PDF або TXT", type=["pdf", "txt"])
 
-def load_text(path):
-    path = Path(path)
-    if path.suffix.lower() == ".pdf":
-        return extract_text_from_pdf(path)
-    elif path.suffix.lower() == ".txt":
-        return path.read_text(encoding="utf-8", errors="ignore")
+text = ""
+if uploaded_file is not None:
+    # Зчитування тексту залежно від типу
+    suffix = Path(uploaded_file.name).suffix.lower()
+    if suffix == ".pdf":
+        pdf_reader = PyPDF2.PdfReader(uploaded_file)
+        pages = [p.extract_text() or "" for p in pdf_reader.pages]
+        text = "\n".join(pages)
+    elif suffix == ".txt":
+        text = uploaded_file.getvalue().decode("utf-8", errors="ignore")
+    st.success("Текст успішно витягнуто.")
+
+# Якщо текст є, продовжуємо
+if text:
+    # 2) Очистка та токенізація, частотність
+    lang = st.selectbox("Мова обробки (для стоп-слів)", ["english", "russian", "ukrainian", "none"])
+    if lang == "english":
+        stops = set(stopwords.words("english"))
+    elif lang == "russian":
+        try:
+            stops = set(stopwords.words("russian"))
+        except:
+            stops = set()
+            st.warning("Список зупинок для російської може бути неповним.")
+    elif lang == "ukrainian":
+        # Якщо потрібні українські стоп-слова, їх можна підключити окремо
+        stops = set(stopwords.words("english"))  # простіша заміна
+        st.info("Українські стоп-слова не встановлені за замовчуванням. Використано англо-словник як базу.")
     else:
-        raise ValueError("Unsupported file type")
+        stops = set()
 
-# 2) Попередня обробка та частотність
-def preprocess_text(text, lang='russian'):
-    stop = set(stopwords.words('russian'))  # змінити на 'english' або відповідну мову
-    # простий токенізатор
-    tokens = word_tokenize(text.lower())
-    tokens = [t for t in tokens if t.isalpha()]  # прибираємо цифри та знаки
-    tokens = [t for t in tokens if t not in stop]
-    return tokens
+    # Прості попередня обробка
+    def tokenize_and_filter(text, language_stops):
+        tokens = word_tokenize(text.lower())
+        tokens = [t for t in tokens if t.isalpha()]
+        if language_stops:
+            tokens = [t for t in tokens if t not in language_stops]
+        return tokens
 
-def word_frequencies(tokens):
-    return Counter(tokens)
+    tokens = tokenize_and_filter(text, stops)
+    freq = Counter(tokens)
 
-# 3) WordCloud та Barplot
-def plot_wordcloud(freq, max_words=200, output_path="wordcloud.png"):
-    wc = WordCloud(width=800, height=400, background_color="white", max_words=max_words)
+    # 3) Візуалізації
+    st.subheader("Word Cloud")
+    wc = WordCloud(width=800, height=400, background_color="white", max_words=200)
     wc.generate_from_frequencies(freq)
-    plt.figure(figsize=(12, 6))
-    plt.imshow(wc, interpolation="bilinear")
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
+    fig_wc, ax_wc = plt.subplots(figsize=(12, 6))
+    ax_wc.imshow(wc, interpolation="bilinear")
+    ax_wc.axis("off")
 
-def plot_top_words_bar(freq, top_n=20, output_path="top_words.png"):
+    st.pyplot(fig_wc)
+
+    st.subheader("Top слів (barplot)")
+    top_n = st.slider("Кількість топ слів", min_value=5, max_value=50, value=20, step=1)
     common = freq.most_common(top_n)
-    words, counts = zip(*common)
-    plt.figure(figsize=(10,6))
-    plt.bar(words, counts)
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
+    words, counts = zip(*common) if common else ([], [])
+    fig_bar, ax_bar = plt.subplots(figsize=(12, 6))
+    ax_bar.bar(words, counts)
+    ax_bar.set_xticklabels(words, rotation=45, ha="right")
+    ax_bar.set_xlabel("Слова")
+    ax_bar.set_ylabel("Частота")
+    st.pyplot(fig_bar)
 
-# 4) LDA з gensim
-def lda_model_from_tokens(tokens_list, num_topics=5, passes=10):
-    # створюємо словник та корпус
-    dictionary = corpora.Dictionary([tokens_list])
-    corpus = [dictionary.doc2bow(tokens_list)]
-    # але нам потрібні багато документів; для прикладу використаємо список документів
-    return dictionary, corpus
+    # 4) LDA-моделювання
+    st.sidebar.header("LDA параметри")
+    num_topics = st.sidebar.number_input("Кількість тем", min_value=2, max_value=20, value=5, step=1)
+    passes = st.sidebar.number_input("Passes (циклів навчання)", min_value=1, max_value=20, value=10, step=1)
 
-# Розширений приклад з кількома документами
-def run_example(doc_texts, num_topics=5):
-    # токени для кожного документа
-    tokenized = [simple_preprocess(doc, deacc=True) for doc in doc_texts]
-    dictionary = corpora.Dictionary(tokenized)
-    corpus = [dictionary.doc2bow(text) for text in tokenized]
+    # Розбиття документів на окремі документи для LDA
+    # Якщо хочеш, можеш розділяти за абзацами. Тут зробимо один документ.
+    docs = [text]
 
-    lda = LdaModel(corpus=corpus, id2word=dictionary, num_topics=num_topics, passes=10)
-    # топ-слова для кожної теми
-    topics = lda.print_topics(num_words=10)
-    for t in topics:
-        print(t)
+    # Токенізація документів
+    tokenized_docs = [simple_preprocess(doc, deacc=True) for doc in docs]
 
-    # візуалізація
-    vis = pyLDAvis.gensim_models.prepare(lda, corpus, dictionary)
-    pyLDAvis.save_html(vis, "lda_visualization.html")
+    # Створення словника та корпусу
+    dictionary = corpora.Dictionary(tokenized_docs)
+    corpus = [dictionary.doc2bow(doc) for doc in tokenized_docs]
 
-    return lda, dictionary, corpus
+    if len(dictionary) > 0 and len(corpus) > 0:
+        lda = LdaModel(
+            corpus=corpus,
+            id2word=dictionary,
+            num_topics=num_topics,
+            passes=passes,
+            random_state=42
+        )
 
-# Приклад використання
-if __name__ == "__main__":
-    path = "document.pdf"  # заміни на свій файл
-    text = load_text(path)
+        topics = lda.print_topics(num_words=8)
+        st.subheader("Теми (Top words per topic)")
+        for t in topics:
+            st.write(t)
 
-    tokens = preprocess_text(text)
-    freq = word_frequencies(tokens)
-
-    plot_wordcloud(freq, output_path="wordcloud.png")
-    plot_top_words_bar(freq, top_n=20, output_path="top_words.png")
-
-    # Приклад для LDA: треба кілька документів
-    docs = [
-        "This is a sample document about data science and machine learning.",
-        "Natural language processing and text analytics are part of data science.",
-        "Statistics and probability are foundational to machine learning.",
-        "Text analytics involves extracting topics and themes from documents."
-    ]
-    lda_model_from_tokens([tokenize for tokenize in [simple_preprocess(d) for d in docs]], num_topics=3)
-
-    # або використати run_example з реальною парою документів
-    lda, dictionary, corpus = run_example(docs, num_topics=3)
+        # Візуалізація pyLDAvis
+        vis = pyLDAvis.gensim_models.prepare(lda, corpus, dictionary)
+        pyLDAvis.save_html(vis, "lda_visualization.html")
+        with open("lda_visualization.html", "r", encoding="utf-8") as f:
+            html_data = f.read()
+        st.components.v1.html(html_data, height=600, width="100%")
+else:
+    st.info("Зачекайте завантаження файлу.")
