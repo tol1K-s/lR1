@@ -4,15 +4,6 @@ import re
 from collections import Counter
 from typing import List, Tuple
 
-
-# Попробуємо імпорти, які можуть бути відсутні — обробимо graceful fallback
-try:
-import PyPDF2
-_HAS_PYPDF2 = True
-except Exception:
-_HAS_PYPDF2 = False
-
-
 try:
 from sklearn.feature_extraction.text import TfidfVectorizer
 _HAS_SKLEARN = True
