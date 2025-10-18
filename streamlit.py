@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
 import nltk
-from nltk.corpus import stopwords
-from wordcloud import WordCloud
+from nltk.corpus 
+import stopwords
+from wordcloud 
+import WordCloud
 import matplotlib.pyplot as plt
 import seaborn as sns
 from gensim import corpora, models
